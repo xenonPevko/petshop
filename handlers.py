@@ -426,6 +426,13 @@ async def get_address(message: Message, state: FSMContext):
     phone = data.get('phone')
     
     user = get_user(message.from_user.id)
+    
+    if not user:
+        await message.answer("Ошибка: пользователь не найден. Напишите /start")
+        await state.clear()
+        return
+    
+    # Получаем корзину для подсчёта суммы
     cart_items = get_cart(user['user_id'])
     
     if not cart_items:
@@ -435,23 +442,30 @@ async def get_address(message: Message, state: FSMContext):
     
     total = sum(item['price'] * item['quantity'] for item in cart_items)
     
-    # Создаём заказ
-    order_id = create_order(user['user_id'], total, phone, address)
-    
-    # Сохраняем адрес в БД
-    update_user_info(message.from_user.id, address=address)
-    
-    await state.clear()
-    
-    await message.answer(
-        f"✅ Заказ #{order_id} успешно оформлен!\n\n"
-        f"💰 Сумма: {format_price(total)}₽\n"
-        f"📞 Телефон: {phone}\n"
-        f"🏠 Адрес: {address}\n\n"
-        f"Статус заказа можно отслеживать в разделе «Мои заказы»",
-        reply_markup=get_main_keyboard(is_admin(message.from_user.id))
-    )
-
+    try:
+        # Создаём заказ (вся операция в одной транзакции)
+        order_id = create_order(user['user_id'], total, phone, address)
+        
+        # Сохраняем адрес в БД
+        update_user_info(message.from_user.id, address=address)
+        
+        await state.clear()
+        
+        await message.answer(
+            f"✅ Заказ #{order_id} успешно оформлен!\n\n"
+            f"💰 Сумма: {format_price(total)}₽\n"
+            f"📞 Телефон: {phone}\n"
+            f"🏠 Адрес: {address}\n\n"
+            f"Статус заказа можно отслеживать в разделе «Мои заказы»",
+            reply_markup=get_main_keyboard(is_admin(message.from_user.id))
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при создании заказа: {e}")
+        await message.answer(
+            "❌ Произошла ошибка при оформлении заказа. Пожалуйста, попробуйте позже.",
+            reply_markup=get_main_keyboard(is_admin(message.from_user.id))
+        )
+        await state.clear()
 
 @router.message(F.text == "📦 Мои заказы")
 async def show_orders(message: Message):

@@ -8,12 +8,14 @@ logger = logging.getLogger(__name__)
 
 @contextmanager
 def get_db_connection():
-    """Возвращает соединение с базой данных с правильной обработкой транзакций"""
+    """Возвращает соединение с базой данных"""
     conn = None
     try:
-        conn = sqlite3.connect(DB_NAME, timeout=20)  # timeout 20 секунд
+        conn = sqlite3.connect(DB_NAME, timeout=30, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")  # Включаем WAL режим для лучшей конкурентности
+        # Включаем WAL режим для лучшей конкурентности
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         yield conn
         conn.commit()
     except Exception as e:
@@ -252,7 +254,6 @@ def add_to_cart(user_id, product_id, quantity=1):
     with get_db_connection() as conn:
         cursor = conn.cursor()
 
-        # Проверяем, есть ли уже такой товар в корзине
         cursor.execute('''
             SELECT * FROM cart WHERE user_id = ? AND product_id = ?
         ''', (user_id, product_id))
@@ -311,34 +312,46 @@ def clear_cart(user_id):
 # ==================== ЗАКАЗЫ ====================
 
 def create_order(user_id, total_amount, phone, address):
-    """Создаёт заказ"""
+    """Создаёт заказ - ВСЯ ОПЕРАЦИЯ В ОДНОЙ ТРАНЗАКЦИИ"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
 
-        # Создаём заказ
+        # 1. Получаем корзину пользователя
+        cursor.execute('''
+            SELECT c.cart_id, c.product_id, c.quantity, p.name, p.price, p.stock
+            FROM cart c
+            JOIN products p ON c.product_id = p.product_id
+            WHERE c.user_id = ?
+        ''', (user_id,))
+        
+        cart_items = cursor.fetchall()
+        
+        if not cart_items:
+            raise ValueError("Корзина пуста")
+
+        # 2. Создаём заказ
         cursor.execute('''
             INSERT INTO orders (user_id, total_amount, phone, address, status)
             VALUES (?, ?, ?, ?, 'pending')
         ''', (user_id, total_amount, phone, address))
-
+        
         order_id = cursor.lastrowid
 
-        # Переносим товары из корзины в order_items
-        cart_items = get_cart(user_id)
-
+        # 3. Добавляем товары в order_items и обновляем склад
         for item in cart_items:
-            product = get_product_by_id(item['product_id'])
+            # Добавляем в order_items
             cursor.execute('''
                 INSERT INTO order_items (order_id, product_id, product_name, price, quantity)
                 VALUES (?, ?, ?, ?, ?)
-            ''', (order_id, item['product_id'], product['name'], product['price'], item['quantity']))
+            ''', (order_id, item['product_id'], item['name'], item['price'], item['quantity']))
 
-            # Уменьшаем количество товара на складе
-            new_stock = product['stock'] - item['quantity']
-            update_product_stock(item['product_id'], new_stock)
+            # Обновляем склад
+            new_stock = item['stock'] - item['quantity']
+            cursor.execute('UPDATE products SET stock = ? WHERE product_id = ?', 
+                          (new_stock, item['product_id']))
 
-        # Очищаем корзину
-        clear_cart(user_id)
+            # Удаляем из корзины
+            cursor.execute('DELETE FROM cart WHERE cart_id = ?', (item['cart_id'],))
 
         return order_id
 
