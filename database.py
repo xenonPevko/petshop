@@ -1,15 +1,28 @@
 import sqlite3
 import logging
+from contextlib import contextmanager
 
 DB_NAME = "pet_shop.db"
 logger = logging.getLogger(__name__)
 
 
+@contextmanager
 def get_db_connection():
-    """Возвращает соединение с базой данных"""
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Возвращает соединение с базой данных с правильной обработкой транзакций"""
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_NAME, timeout=20)  # timeout 20 секунд
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")  # Включаем WAL режим для лучшей конкурентности
+        yield conn
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        raise e
+    finally:
+        if conn:
+            conn.close()
 
 
 def init_db():
@@ -136,7 +149,6 @@ def init_db():
                     VALUES (?, ?, ?, ?, ?, ?)
                 ''', p)
 
-        conn.commit()
         logger.info("База данных инициализирована")
 
 
@@ -150,7 +162,6 @@ def add_user(telegram_id, first_name, phone=None, address=None):
             INSERT OR REPLACE INTO users (telegram_id, first_name, phone, address)
             VALUES (?, ?, ?, ?)
         ''', (telegram_id, first_name, phone, address))
-        conn.commit()
         return cursor.lastrowid
 
 
@@ -170,7 +181,6 @@ def update_user_info(telegram_id, phone=None, address=None):
             cursor.execute('UPDATE users SET phone = ? WHERE telegram_id = ?', (phone, telegram_id))
         if address:
             cursor.execute('UPDATE users SET address = ? WHERE telegram_id = ?', (address, telegram_id))
-        conn.commit()
 
 
 # ==================== ТОВАРЫ И КАТЕГОРИИ ====================
@@ -217,7 +227,6 @@ def add_product(category_id, name, description, price, stock, image_url=""):
             INSERT INTO products (category_id, name, description, price, stock, image_url)
             VALUES (?, ?, ?, ?, ?, ?)
         ''', (category_id, name, description, price, stock, image_url))
-        conn.commit()
         return cursor.lastrowid
 
 
@@ -226,7 +235,6 @@ def update_product_stock(product_id, stock):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('UPDATE products SET stock = ? WHERE product_id = ?', (stock, product_id))
-        conn.commit()
 
 
 def delete_product(product_id):
@@ -234,7 +242,6 @@ def delete_product(product_id):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('DELETE FROM products WHERE product_id = ?', (product_id,))
-        conn.commit()
         return cursor.rowcount
 
 
@@ -263,8 +270,6 @@ def add_to_cart(user_id, product_id, quantity=1):
                 VALUES (?, ?, ?)
             ''', (user_id, product_id, quantity))
 
-        conn.commit()
-
 
 def get_cart(user_id):
     """Получает корзину пользователя"""
@@ -284,7 +289,6 @@ def remove_from_cart(cart_id):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('DELETE FROM cart WHERE cart_id = ?', (cart_id,))
-        conn.commit()
 
 
 def update_cart_quantity(cart_id, quantity):
@@ -295,7 +299,6 @@ def update_cart_quantity(cart_id, quantity):
             cursor.execute('DELETE FROM cart WHERE cart_id = ?', (cart_id,))
         else:
             cursor.execute('UPDATE cart SET quantity = ? WHERE cart_id = ?', (quantity, cart_id))
-        conn.commit()
 
 
 def clear_cart(user_id):
@@ -303,7 +306,6 @@ def clear_cart(user_id):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('DELETE FROM cart WHERE user_id = ?', (user_id,))
-        conn.commit()
 
 
 # ==================== ЗАКАЗЫ ====================
@@ -329,7 +331,7 @@ def create_order(user_id, total_amount, phone, address):
             cursor.execute('''
                 INSERT INTO order_items (order_id, product_id, product_name, price, quantity)
                 VALUES (?, ?, ?, ?, ?)
-            ''', (order_id, item['product_id'], item['name'], item['price'], item['quantity']))
+            ''', (order_id, item['product_id'], product['name'], product['price'], item['quantity']))
 
             # Уменьшаем количество товара на складе
             new_stock = product['stock'] - item['quantity']
@@ -338,7 +340,6 @@ def create_order(user_id, total_amount, phone, address):
         # Очищаем корзину
         clear_cart(user_id)
 
-        conn.commit()
         return order_id
 
 
@@ -380,7 +381,6 @@ def update_order_status(order_id, status):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('UPDATE orders SET status = ? WHERE order_id = ?', (status, order_id))
-        conn.commit()
 
 
 # ==================== АДМИНИСТРАТОРЫ ====================
@@ -390,7 +390,6 @@ def add_admin(telegram_id):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('INSERT OR IGNORE INTO admins (telegram_id) VALUES (?)', (telegram_id,))
-        conn.commit()
 
 
 def is_admin(telegram_id):
