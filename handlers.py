@@ -3,7 +3,7 @@ from datetime import datetime
 
 from aiogram import Router, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
@@ -610,20 +610,20 @@ async def start_add_product(message: Message, state: FSMContext):
         await message.answer("Сначала добавьте категории в БД")
         return
     
-    keyboard = []
-    row = []
+    # Создаём клавиатуру с категориями
+    from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+    
+    buttons = []
     for cat in categories:
-        row.append(KeyboardButton(text=cat['category_name']))
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-    keyboard.append([KeyboardButton(text="◀️ Отмена")])
+        buttons.append([KeyboardButton(text=cat['category_name'])])
+    
+    buttons.append([KeyboardButton(text="◀️ Отмена")])
+    
+    keyboard = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
     
     await message.answer(
         "Выберите категорию товара:",
-        reply_markup=ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+        reply_markup=keyboard
     )
     await state.set_state(AddProductStates.waiting_for_category)
 
