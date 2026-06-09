@@ -3,14 +3,18 @@ from datetime import datetime
 
 from aiogram import Router, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove, KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import (
+    Message, CallbackQuery, ReplyKeyboardRemove,
+    KeyboardButton, ReplyKeyboardMarkup,
+    InlineKeyboardButton, InlineKeyboardMarkup
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from database import (
-    add_user, get_user, update_user_info, init_db,
+    add_user, get_user, update_user_info,
     get_all_categories, get_products_by_category, get_product_by_id, get_all_products,
-    add_product, delete_product, update_product_stock,
+    add_product, delete_product,
     add_to_cart, get_cart, remove_from_cart, update_cart_quantity, clear_cart,
     create_order, get_user_orders, get_order_items, get_all_orders, update_order_status,
     add_admin, is_admin
@@ -98,7 +102,6 @@ async def show_categories(message: Message):
     for cat in get_all_categories()
 ))
 async def show_products_by_category(message: Message):
-    # Извлекаем название категории из кнопки (убираем эмодзи)
     full_text = message.text
     category_name = full_text.split(" ", 1)[-1] if " " in full_text else full_text
     
@@ -155,7 +158,6 @@ async def show_product_detail(callback: CallbackQuery):
 async def increase_quantity(callback: CallbackQuery):
     product_id = int(callback.data.split("_")[1])
     
-    # Получаем текущий callback message и извлекаем текущее количество
     message_text = callback.message.text
     lines = message_text.split("\n")
     
@@ -170,7 +172,6 @@ async def increase_quantity(callback: CallbackQuery):
     
     new_qty = current_qty + 1
     
-    # Обновляем текст сообщения
     new_text = []
     for line in lines:
         if "Количество:" in line:
@@ -236,7 +237,6 @@ async def add_to_cart_callback(callback: CallbackQuery):
         await callback.answer("Сначала запустите бота /start", show_alert=True)
         return
     
-    # Извлекаем количество из сообщения
     message_text = callback.message.text
     quantity = 1
     
@@ -258,8 +258,6 @@ async def add_to_cart_callback(callback: CallbackQuery):
     
     await callback.answer(f"✓ Товар добавлен в корзину! ({quantity} шт.)", show_alert=True)
     
-    # Возвращаемся к списку товаров в категории
-    # Сохраняем категорию в данных (в реальном приложении нужно хранить)
     await callback.message.delete()
     await callback.message.answer("Товар добавлен в корзину! Можете продолжить покупки.")
 
@@ -276,8 +274,6 @@ async def back_to_categories(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("back_to_products_"))
 async def back_to_products(callback: CallbackQuery):
-    # В реальном приложении нужно сохранять category_id
-    # Для простоты покажем все товары
     products = get_all_products()
     if products:
         await callback.message.edit_text(
@@ -323,7 +319,6 @@ async def remove_cart_item(callback: CallbackQuery):
     
     await callback.answer("Товар удалён из корзины")
     
-    # Обновляем отображение корзины
     user = get_user(callback.from_user.id)
     cart_items = get_cart(user['user_id'])
     
@@ -365,7 +360,6 @@ async def start_checkout(callback: CallbackQuery, state: FSMContext):
         return
     
     if user['phone']:
-        # Если номер уже есть, спрашиваем адрес
         await state.update_data(phone=user['phone'])
         await callback.message.answer(
             "📝 Укажите адрес доставки:",
@@ -387,7 +381,6 @@ async def get_phone(message: Message, state: FSMContext):
     phone = message.contact.phone_number
     await state.update_data(phone=phone)
     
-    # Сохраняем номер в БД
     update_user_info(message.from_user.id, phone=phone)
     
     await message.answer(
@@ -399,7 +392,14 @@ async def get_phone(message: Message, state: FSMContext):
 
 @router.message(CheckoutStates.waiting_for_phone, F.text)
 async def get_phone_text(message: Message, state: FSMContext):
-    # Если пользователь отправил текст вместо контакта
+    if message.text == "◀️ Отмена":
+        await state.clear()
+        await message.answer(
+            "Оформление заказа отменено",
+            reply_markup=get_main_keyboard(is_admin(message.from_user.id))
+        )
+        return
+    
     phone = message.text
     await state.update_data(phone=phone)
     update_user_info(message.from_user.id, phone=phone)
@@ -432,7 +432,6 @@ async def get_address(message: Message, state: FSMContext):
         await state.clear()
         return
     
-    # Получаем корзину для подсчёта суммы
     cart_items = get_cart(user['user_id'])
     
     if not cart_items:
@@ -443,10 +442,8 @@ async def get_address(message: Message, state: FSMContext):
     total = sum(item['price'] * item['quantity'] for item in cart_items)
     
     try:
-        # Создаём заказ (вся операция в одной транзакции)
         order_id = create_order(user['user_id'], total, phone, address)
         
-        # Сохраняем адрес в БД
         update_user_info(message.from_user.id, address=address)
         
         await state.clear()
@@ -466,6 +463,7 @@ async def get_address(message: Message, state: FSMContext):
             reply_markup=get_main_keyboard(is_admin(message.from_user.id))
         )
         await state.clear()
+
 
 @router.message(F.text == "📦 Мои заказы")
 async def show_orders(message: Message):
@@ -610,9 +608,7 @@ async def start_add_product(message: Message, state: FSMContext):
         await message.answer("Сначала добавьте категории в БД")
         return
     
-    # Создаём клавиатуру с категориями
-    from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
-    
+    # KeyboardButton уже импортирован в начале файла
     buttons = []
     for cat in categories:
         buttons.append([KeyboardButton(text=cat['category_name'])])
@@ -809,7 +805,7 @@ async def admin_all_orders(message: Message):
         return
     
     text = "*📦 Все заказы:*\n\n"
-    for order in orders[:20]:  # Показываем последние 20
+    for order in orders[:20]:
         status_emoji = {
             'pending': '⏳',
             'processing': '🔄',
